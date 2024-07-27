@@ -1,0 +1,86 @@
+# Sin and Cos
+
+```elixir
+Mix.install([
+  {:vega_lite, "~> 0.1.6"},
+  {:kino_vega_lite, "~> 0.1.11"},
+  {:kino_explorer, "~> 0.1.20"}
+])
+```
+
+## Section
+
+```elixir
+res_input = Kino.Input.range("resolution", min: 1, max: 100, step: 10) 
+lower_input = Kino.Input.range("lower in pi", min: -4, max: 4, step: 1, default: 0)
+upper_input = Kino.Input.range("upper in pi", min: -4, max: 4, step: 1, default: 0)
+fx_input = Kino.Input.range("frequency of sin", min: 1, max: 8, step: 1, default: 1)
+fy_input = Kino.Input.range("frequency of cos", min: 1, max: 8, step: 1, default: 1)
+
+inputs = [res: res_input, lower: lower_input, upper: upper_input, f_x: fx_input, f_y: fy_input]
+
+```
+
+```elixir
+defmodule SinCosChart do
+  def calcValues(f_x, f_y, resolution, lower_bound, upper_bound) do
+    lower = floor(lower_bound * resolution)
+    upper = ceil(upper_bound * resolution)
+    
+    normalize = fn x -> 
+      abs_range = upper - lower
+      abs_bound = upper_bound - lower_bound
+      (x/ abs_range) * abs_bound
+      end
+
+    
+    tuples = for x <- lower..upper do 
+      [:math.sin(normalize.(x) * 2 * :math.pi * f_x),
+       :math.cos(normalize.(x) * 2 * :math.pi * f_y)]
+    end
+
+    x_axis = for x <- lower..upper, do: normalize.(x)
+
+    Enum.reduce(tuples,%{x: [], y: []}, fn [x,y], %{x: x_values, y: y_values} -> 
+      %{x: [x | x_values], y: [y|y_values]}
+      end )
+    |> Enum.map(fn {key, value} -> {key, Enum.reverse(value)} end)
+    |> Enum.into(%{})
+    |> Map.put(:x_axis, x_axis)
+  end
+
+  def plotChart(data) do
+    VegaLite.new(width: 500, height: 500)
+    |> VegaLite.data_from_values(data, only: ["y", "x"])
+    |> VegaLite.mark(:point)
+    |> VegaLite.encode_field(:x, "x", type: :quantitative)
+    |> VegaLite.encode_field(:y, "y", type: :quantitative)
+  end
+end
+
+
+```
+
+```elixir
+inputs |> Enum.each(fn {_k, v} -> Kino.render(v) end)
+
+inputs 
+|> Kino.Control.tagged_stream()
+|> Stream.map(fn 
+  {:lower, %{value: v} = values} -> {:lower, Map.put(values, :value, v * :math.pi)}
+  {:upper, %{value: v} = values} -> {:upper, Map.put(values, :value, v * :math.pi)}
+  attrs -> attrs
+    end  )
+|> Kino.animate(%{res: 50, lower: 0, upper: 2 * :math.pi, f_x: 1, f_y: 1},
+  fn {key, %{value: v}}, attr -> 
+    new_attrs = Map.put(attr, key, v)
+    
+    %{res: res, lower: lower, upper: upper, f_x: f_x, f_y: f_y} = new_attrs
+    chart = SinCosChart.calcValues(f_x,f_y, res, lower, upper)
+    |> SinCosChart.plotChart()
+    
+    {:cont, chart, new_attrs}
+  end
+)
+
+```

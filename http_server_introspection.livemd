@@ -1,0 +1,120 @@
+# Http Server Introspection
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.13.0"},
+  {:kino_vega_lite, "~> 0.1.11"}
+])
+```
+
+## Section
+
+```elixir
+import Kino.Shorts
+
+defmodule Introspection do
+  require Kino.RPC
+  def get_active_connections(%{processes: processes}) do
+    connection_supervisor = processes 
+      |> Enum.find(fn 
+           proc -> Keyword.get(proc, :registered_name) == HttpServer.ConnectionSupervisor 
+         end)
+
+    active_connections =  processes 
+      |> Enum.filter(fn proc -> 
+           Keyword.get(proc, :pid) in Keyword.get(connection_supervisor, :links) 
+         end)
+      |> Enum.filter(fn proc -> 
+           Keyword.get(proc, :registered_name) != HttpServer.Supervisor 
+         end)
+
+    active_connections
+  end
+
+  def get_analytics(node, secret) do
+    Node.set_cookie(node, secret)
+    Kino.RPC.eval_string(
+    node,
+    ~S"""
+    processes = Process.list() 
+    |> Enum.flat_map(fn pid -> 
+        case Process.info(pid) do
+          nil -> []
+          info -> [Keyword.put(info, :pid, pid)]
+        end
+      end)
+
+    memory = :erlang.memory(:total)
+
+    %{processes: processes, memory: memory}
+    """,
+    file: __ENV__.file
+  )
+  end
+end
+
+node = :"http@host.docker.internal"
+Node.set_cookie(node, String.to_atom(System.fetch_env!("LB_SECRET")))
+
+  
+```
+
+```elixir
+node = read_text("node", default: "http@host.docker.internal")
+cookie = read_password("cookie")
+
+node
+```
+
+```elixir
+connections_chart = VegaLite.new(width: 700)
+|> VegaLite.mark(:line)
+|> VegaLite.encode_field(:x, "time", type: :temporal)
+|> VegaLite.encode_field(:y, "connection_count", type: :quantitative, title: "# connection")
+|> Kino.VegaLite.render()
+
+memory_chart = VegaLite.new(width: 700)
+|> VegaLite.mark(:line)
+|> VegaLite.encode_field(:x, "time", type: :temporal)
+|> VegaLite.encode_field(:y, "memory", type: :quantitative, title: "memory in KB")
+|> Kino.VegaLite.render()
+
+total_memory_chart = VegaLite.new(width: 700)
+|> VegaLite.mark(:line)
+|> VegaLite.encode_field(:x, "time", type: :temporal)
+|> VegaLite.encode_field(:y, "memory", type: :quantitative, title: "memory in MB")
+|> Kino.VegaLite.render()
+
+Kino.listen(20, fn _i -> 
+  node_atom = String.to_atom(node)
+  cookie_atom = String.to_atom(cookie)
+  
+  analytics = Introspection.get_analytics(node_atom, cookie_atom) 
+  active_connections_procs = Introspection.get_active_connections(analytics)
+  
+  point = %{
+    time: DateTime.now!("Etc/UTC"),
+    connection_count: active_connections_procs |> Enum.count()
+  }
+  Kino.VegaLite.push(connections_chart, point, window: 10_000)
+
+  used_memory = active_connections_procs
+    |> Enum.map(fn proc -> proc[:heap_size] + proc[:stack_size] end)
+    |> Enum.sum()
+
+  memory_point = %{
+    time: DateTime.now!("Etc/UTC"),
+    memory: used_memory / 1000
+  }
+  Kino.VegaLite.push(memory_chart, memory_point, window: 10_000)
+
+  total_memory = analytics[:memory]
+  total_memory_point = %{
+    time: DateTime.now!("Etc/UTC"),
+    memory: total_memory / 1000_000
+  }
+
+  Kino.VegaLite.push(total_memory_chart, total_memory_point, window: 10_000)
+end)
+
+```

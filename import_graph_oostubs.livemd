@@ -1,0 +1,81 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Imports Graph oostubs
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.13.0"},
+  {:kino_force_directed_graph, path: "/data/kinos/kino_force_directed_graph"}
+])
+```
+
+## Section
+
+```elixir
+import Kino.Shorts
+
+defmodule DependencyGraph do
+
+  def createGraph(project_path) do
+
+    cpp_file_paths = Path.wildcard("#{project_path}/**/*.cc") 
+    header_file_paths = Path.wildcard("#{project_path}/**/*.h")
+
+    all_file_paths = cpp_file_paths ++ header_file_paths
+    
+    nodes = Enum.map(all_file_paths, fn path -> 
+          %KinoForceDirectedGraph.Node{
+            id: parse_file_name(path),
+            name: parse_file_name(path),
+            group: parse_module(path, project_path),
+          }
+      end)
+      |> Enum.sort_by(fn file -> file.id end)
+      |> Enum.dedup_by(fn file -> file.id end)
+    
+    links = Enum.flat_map(all_file_paths, fn path -> 
+        current_file_name = parse_file_name(path)
+      
+        content = File.read!(path)
+      
+        Regex.scan(~r/#include ["|<]([^"<>]*)["|>]/, content, capture: :all)
+        |> Enum.map(fn [_whole_match, import_path] ->  
+          %KinoForceDirectedGraph.Link{
+            source: current_file_name,
+            target: parse_file_name(import_path)
+          }
+          end)
+      end)
+      |> Enum.filter(fn link -> link.source != link.target end)
+      |> Enum.filter(fn link 
+            -> Enum.any?(nodes, fn node -> node.id == link.target end)
+          end)
+
+    %KinoForceDirectedGraph{links: links, nodes: nodes}
+  end
+
+  defp parse_file_name(path), do: Path.basename(path, ".cc") |> Path.basename(".h") 
+
+  defp parse_module(path, workdir_path) do
+    dir = Path.dirname(path)
+    if dir == workdir_path do
+      "/"
+    else
+      Path.basename(dir)
+    end
+  end
+end
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:module, DependencyGraph, <<70, 79, 82, 49, 0, 0, 21, ...>>, {:parse_module, 2}}
+```
+
+```elixir
+graph = DependencyGraph.createGraph("/workdir")
+
+KinoForceDirectedGraph.new(graph)
+```
